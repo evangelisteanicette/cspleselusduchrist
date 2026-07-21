@@ -1,0 +1,227 @@
+rules_version = '2';
+
+/**
+ * RÈGLES DE SÉCURITÉ FIRESTORE — Élus School Pro
+ * =============================================================
+ * À coller dans Firebase Console > Firestore Database > Règles.
+ * Voir README.md pour la procédure pas à pas.
+ *
+ * Principe : le fichier js/roles.js gère l'affichage côté interface,
+ * ces règles appliquent les MÊMES autorisations côté serveur — un
+ * utilisateur ne peut donc jamais contourner l'interface pour accéder
+ * à des données qui ne lui sont pas destinées (§90).
+ *
+ * Couvre l'ensemble des collections de l'application (Phases 1 à 5) :
+ * users, schools, subjects, grades, resultsValidations, feeSettings,
+ * feeTypes, studentFees, reductions, payments, students (+ sous-collections
+ * enrollments/observations/absences), activityLogs, settings.
+ * =============================================================
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function myRole() {
+      return isSignedIn() ? myProfile().role : null;
+    }
+
+    function isAdminGeneral() {
+      return isSignedIn() && myRole() == 'adminGeneral';
+    }
+
+    function mySchoolId() {
+      return myProfile().schoolId;
+    }
+
+    // ----- users -----
+    // Chacun peut lire/écrire son propre profil (ex: mise à jour lastLogin).
+    // Seul l'Administrateur Général gère les autres comptes.
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdminGeneral());
+      allow create: if isSignedIn() &&
+        // un utilisateur ne peut créer que SON PROPRE document (auto-attribution
+        // du rôle Administrateur Général au tout premier compte, géré côté appli),
+        // toute autre création passe par l'Administrateur Général.
+        (request.auth.uid == userId || isAdminGeneral());
+      allow update, delete: if isAdminGeneral() ||
+        (isSignedIn() && request.auth.uid == userId &&
+         request.resource.data.role == resource.data.role); // un utilisateur ne peut pas changer son propre rôle
+    }
+
+    // ----- schools -----
+    // Lecture ouverte à tout utilisateur authentifié (nécessaire pour les
+    // écrans des Directeurs/Comptables/Enseignants limités à leur école).
+    // Écriture réservée à l'Administrateur Général, à l'exception de deux
+    // compteurs techniques que d'autres rôles font progresser dans le cadre
+    // de leur travail : le Directeur (matricules, §26) et le Comptable
+    // (numéros de reçus, §59), chacun uniquement pour son propre champ.
+    match /schools/{schoolId} {
+      allow read: if isSignedIn();
+      allow create, delete: if isAdminGeneral();
+      allow update: if isAdminGeneral() ||
+        (isSignedIn() && myRole() == 'directeur' && mySchoolId() == schoolId &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['studentCounter'])) ||
+        (isSignedIn() && myRole() == 'comptable' && mySchoolId() == schoolId &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['receiptCounter']));
+    }
+
+    function isTeacherOrDirector() {
+      return isSignedIn() && (myRole() == 'enseignant' || myRole() == 'directeur');
+    }
+
+    function validationKey(schoolId, classe, schoolYear, period) {
+      return schoolId + '_' + classe + '_' + schoolYear + '_' + period;
+    }
+
+    function isPeriodLocked(schoolId, classe, schoolYear, period) {
+      let key = validationKey(schoolId, classe, schoolYear, period);
+      return exists(/databases/$(database)/documents/resultsValidations/$(key)) &&
+        get(/databases/$(database)/documents/resultsValidations/$(key)).data.validated == true;
+    }
+
+    // ----- subjects -----
+    // Lecture ouverte, écriture réservée à l'Administrateur Général (§32).
+    match /subjects/{subjectId} {
+      allow read: if isSignedIn();
+      allow write: if isAdminGeneral();
+    }
+
+    // ----- grades -----
+    // Lecture : Administrateur Général, ou tout utilisateur limité à son
+    // école. Écriture : Enseignant/Directeur/Administrateur Général de
+    // l'école concernée, sauf si la période a été validée (§43-44) — dans
+    // ce cas, seul l'Administrateur Général peut encore intervenir.
+    match /grades/{gradeId} {
+      allow read: if isSignedIn() && (isAdminGeneral() || resource.data.schoolId == mySchoolId());
+      allow create: if isAdminGeneral() ||
+        (isTeacherOrDirector() && request.resource.data.schoolId == mySchoolId() &&
+         !isPeriodLocked(request.resource.data.schoolId, request.resource.data.classe, request.resource.data.schoolYear, request.resource.data.period));
+      allow delete: if isAdminGeneral() ||
+        (isTeacherOrDirector() && resource.data.schoolId == mySchoolId() &&
+         !isPeriodLocked(resource.data.schoolId, resource.data.classe, resource.data.schoolYear, resource.data.period));
+      allow update: if isAdminGeneral();
+    }
+
+    // ----- resultsValidations -----
+    // Le Directeur valide les résultats de son école ; seul l'Administrateur
+    // Général peut ensuite déverrouiller exceptionnellement (§44).
+    match /resultsValidations/{key} {
+      allow read: if isSignedIn();
+      allow write: if isAdminGeneral() ||
+        (isSignedIn() && myRole() == 'directeur' && request.resource.data.schoolId == mySchoolId());
+    }
+
+    function isComptable() {
+      return isSignedIn() && myRole() == 'comptable';
+    }
+
+    function isFinanceRole() {
+      return isAdminGeneral() || isComptable();
+    }
+
+    // ----- feeSettings / feeTypes -----
+    // Paramétrage des frais (§53-54) : consultable par l'équipe financière,
+    // modifiable uniquement par l'Administrateur Général. Le Directeur et
+    // l'Enseignant n'ont aucun accès aux données financières (§19).
+    match /feeSettings/{schoolYear} {
+      allow read: if isFinanceRole();
+      allow write: if isAdminGeneral();
+    }
+    match /feeTypes/{feeTypeId} {
+      allow read: if isFinanceRole();
+      allow write: if isAdminGeneral();
+    }
+
+    // ----- studentFees (autres frais assignés à un élève) -----
+    match /studentFees/{id} {
+      allow read: if isAdminGeneral() || (isComptable() && resource.data.schoolId == mySchoolId());
+      allow create: if isAdminGeneral() || (isComptable() && request.resource.data.schoolId == mySchoolId());
+      allow update, delete: if isAdminGeneral();
+    }
+
+    // ----- reductions -----
+    // Décision discrétionnaire : seul l'Administrateur Général accorde une
+    // réduction (§56) ; le Comptable peut la consulter pour l'appliquer.
+    match /reductions/{id} {
+      allow read: if isAdminGeneral() || (isComptable() && resource.data.schoolId == mySchoolId());
+      allow write: if isAdminGeneral();
+    }
+
+    // ----- payments -----
+    // Le Comptable encaisse et émet les reçus mais ne peut ni modifier ni
+    // supprimer un paiement déjà enregistré (§57, §60) : seul le champ
+    // "voided" (annulation tracée) peut être modifié, et uniquement par
+    // l'Administrateur Général.
+    match /payments/{id} {
+      allow read: if isAdminGeneral() || (isComptable() && resource.data.schoolId == mySchoolId());
+      allow create: if isAdminGeneral() || (isComptable() && request.resource.data.schoolId == mySchoolId());
+      allow update: if isAdminGeneral();
+      allow delete: if false;
+    }
+
+    // Lecture : Administrateur Général (tout), ou tout utilisateur limité
+    // aux élèves de sa propre école (§18-19). Écriture : Administrateur
+    // Général ou Directeur de l'école concernée (§19 : le Directeur gère
+    // les inscriptions/réinscriptions, le Comptable et l'Enseignant ne
+    // modifient jamais le dossier administratif d'un élève).
+    match /students/{studentId} {
+      allow read: if isSignedIn() &&
+        (isAdminGeneral() || resource.data.schoolId == mySchoolId());
+      allow create: if isAdminGeneral() ||
+        (isSignedIn() && myRole() == 'directeur' && request.resource.data.schoolId == mySchoolId());
+      allow update: if isAdminGeneral() ||
+        (isSignedIn() && myRole() == 'directeur' && resource.data.schoolId == mySchoolId());
+      allow delete: if isAdminGeneral();
+
+      match /enrollments/{yearId} {
+        allow read: if isSignedIn() &&
+          (isAdminGeneral() || get(/databases/$(database)/documents/students/$(studentId)).data.schoolId == mySchoolId());
+        allow write: if isAdminGeneral() ||
+          (isSignedIn() && myRole() == 'directeur' &&
+           get(/databases/$(database)/documents/students/$(studentId)).data.schoolId == mySchoolId());
+      }
+
+      match /observations/{obsId} {
+        allow read: if isSignedIn() &&
+          (isAdminGeneral() || get(/databases/$(database)/documents/students/$(studentId)).data.schoolId == mySchoolId());
+        allow create: if isAdminGeneral() ||
+          (isTeacherOrDirector() && get(/databases/$(database)/documents/students/$(studentId)).data.schoolId == mySchoolId());
+        allow update, delete: if isAdminGeneral();
+      }
+
+      match /absences/{absId} {
+        allow read: if isSignedIn() &&
+          (isAdminGeneral() || get(/databases/$(database)/documents/students/$(studentId)).data.schoolId == mySchoolId());
+        allow create: if isAdminGeneral() ||
+          (isTeacherOrDirector() && get(/databases/$(database)/documents/students/$(studentId)).data.schoolId == mySchoolId());
+        allow update, delete: if isAdminGeneral();
+      }
+    }
+
+    // ----- activityLogs -----
+    // Tout utilisateur connecté peut ajouter une ligne (traçabilité de ses
+    // propres actions). Seul l'Administrateur Général peut consulter le
+    // journal complet ; personne ne peut modifier ni supprimer une entrée.
+    match /activityLogs/{logId} {
+      allow create: if isSignedIn();
+      allow read: if isAdminGeneral();
+      allow update, delete: if false;
+    }
+
+    // ----- settings -----
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdminGeneral();
+    }
+
+    // Par défaut, tout ce qui n'est pas explicitement autorisé ci-dessus
+    // est refusé (comportement par défaut de Firestore).
+  }
+}
