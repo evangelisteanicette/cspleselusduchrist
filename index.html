@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Élus School Pro</title>
+<meta name="description" content="Application de gestion scolaire du Complexe Scolaire Privé Bilingue Les Élus du Christ" />
+<meta name="theme-color" content="#101B33" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="assets/icons/favicon-32.png" sizes="32x32" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Élus School Pro" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="css/styles.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
+</head>
+<body>
+
+<!-- ===================== ÉCRAN DE CONNEXION ===================== -->
+<div id="view-login" class="login-screen">
+  <div class="login-panel">
+    <div class="login-panel-pattern" aria-hidden="true"></div>
+    <div class="login-panel-content">
+      <img src="assets/icons/icon-192.png" alt="" width="64" height="64" />
+      <h1 id="login-app-name">Élus School Pro</h1>
+      <p id="login-institution">Complexe Scolaire Privé Bilingue Les Élus du Christ</p>
+      <ul class="login-panel-list">
+        <li>Gestion des élèves, des classes et des écoles</li>
+        <li>Suivi académique et bulletins</li>
+        <li>Comptabilité et reçus</li>
+        <li>Statistiques en temps réel</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="login-form-wrap">
+    <form id="login-form" class="login-form" autocomplete="on">
+      <h2>Connexion</h2>
+      <p class="muted">Connectez-vous avec le compte fourni par votre établissement.</p>
+
+      <div id="login-error" class="alert alert-error" hidden></div>
+
+      <label>Adresse e-mail
+        <input type="email" id="login-email" name="email" required autocomplete="username" placeholder="nom@ecole.com" />
+      </label>
+
+      <label>Mot de passe
+        <input type="password" id="login-password" name="password" required autocomplete="current-password" placeholder="••••••••" />
+      </label>
+
+      <button type="submit" id="login-submit" class="btn-primary btn-block">Se connecter</button>
+
+      <a href="#" id="forgot-password" class="forgot-link">Mot de passe oublié ?</a>
+    </form>
+    <p class="login-footer">© <span id="year"></span> Élus School Pro</p>
+  </div>
+</div>
+
+<!-- ===================== APPLICATION (après connexion) ===================== -->
+<div id="view-app" hidden></div>
+
+<script>document.getElementById("year").textContent = new Date().getFullYear();</script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
